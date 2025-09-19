@@ -1,14 +1,61 @@
 #!/usr/bin/env bash
-# Script to configure /etc/hosts with custom DNS entries
-# Backup the original /etc/hosts file
-cp /etc/hosts /etc/hosts.bak
+# Configure /etc/hosts so localhost resolves to 127.0.0.2 and facebook.com to 8.8.8.8
 
-# Add or update the localhost entry
-sed -i '/127.0.0.1\s\+localhost/s/^/#/' /etc/hosts # Comment out existing localhost entry
-echo "127.0.0.2 localhost" | tee -a /etc/hosts
+set -euo pipefail
 
-# Add or update the facebook.com entry
-sed -i '/facebook.com/s/^/#/' /etc/hosts # Comment out any existing facebook.com entry
-echo "8.8.8.8 facebook.com" | tee -a /etc/hosts
+HOSTS_FILE="/etc/hosts"
+BACKUP="${HOSTS_FILE}.bak"
+TMP="$(mktemp /tmp/hosts.XXXXXX)"
 
-echo "Configuration complete. /etc/hosts has been updated."
+# Use sudo only when needed
+if [ "$(id -u)" -ne 0 ]; then
+    SUDO="sudo"
+else
+    SUDO=""
+fi
+
+# Create a backup only once
+if [ ! -f "$BACKUP" ]; then
+    $SUDO cp "$HOSTS_FILE" "$BACKUP"
+fi
+
+# Process /etc/hosts:
+# - preserve comment lines and empty lines
+# - for other lines: remove tokens 'facebook.com' and 'localhost'
+# - print the line only if it still has at least one hostname besides the IP
+awk '
+/^[[:space:]]*#/ { print; next }
+/^[[:space:]]*$/ { print; next }
+{
+  ip = $1
+  names = ""
+  for (i = 2; i <= NF; i++) {
+    if ($i != "facebook.com" && $i != "localhost") {
+      names = (names == "" ? $i : names " " $i)
+    }
+  }
+  if (names != "") {
+    print ip " " names
+  }
+}
+' "$HOSTS_FILE" > "$TMP"
+
+# Append required entries if not already present
+if ! grep -qE '^[[:space:]]*127\.0\.0\.2[[:space:]]+localhost([[:space:]]|$)' "$TMP"; then
+  printf '%s\n' "127.0.0.2 localhost" >> "$TMP"
+fi
+
+if ! grep -qE '^[[:space:]]*8\.8\.8\.8[[:space:]]+facebook\.com([[:space:]]|$)' "$TMP"; then
+  printf '%s\n' "8.8.8.8 facebook.com" >> "$TMP"
+fi
+
+# Move new hosts file into place (preserve ownership/permissions)
+$SUDO cp "$TMP" "$HOSTS_FILE"
+$SUDO chown root:root "$HOSTS_FILE"
+$SUDO chmod 0644 "$HOSTS_FILE"
+
+# Cleanup
+rm -f "$TMP"
+
+exit 0
+
